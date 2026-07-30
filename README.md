@@ -1,0 +1,65 @@
+# slip
+
+Keep your Windows PC awake without keeping the monitor on.
+
+`slip` blocks system sleep/standby (via `SetThreadExecutionState`) so
+background work — downloads, renders, scripts, servers — keeps running.
+It deliberately does **not** touch display power settings: your monitor
+still turns off on whatever schedule you've already set in Windows, since
+there's no reason to burn a screen for a background task.
+
+Optionally controllable remotely over Telegram, with an inline-button
+dashboard, so you can extend/cancel the awake window from your phone.
+
+## Install
+
+Grab the latest zip from [Releases](../../releases), extract it anywhere,
+and run `install.bat`. It adds that folder to your user `PATH` and opens a
+test window running `slip help`. Open a **new** terminal afterward — `PATH`
+changes don't apply to windows already open.
+
+Or build from source:
+
+```
+dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o out
+```
+
+## Usage
+
+```
+slip                    Show status (same as "slip status")
+slip <hours>            Stay awake for N hours   (e.g. slip 4)
+slip -d <days>          Stay awake for N days     (e.g. slip -d 4)
+slip off                Cancel - restore normal sleep behavior
+slip status             Show whether it's currently active
+slip help               Show this help
+```
+
+## Telegram remote control (optional)
+
+1. Create a bot with [@BotFather](https://t.me/BotFather), grab the token.
+2. Run `slip -telega "your_token"`.
+3. Message your bot anything. `slip` will ask, in the terminal, whether the
+   Telegram user who just messaged it is you (`y`/`n`). Say `y` and that
+   Telegram account becomes the only one the bot will ever respond to -
+   everyone else is silently ignored.
+4. You'll get a message back with an inline-button dashboard: pick a
+   duration, or turn it off, right from the buttons. Typed commands
+   (`4`, `off`, `status`) work too.
+5. `slip -telega reset` unlinks the bot and erases the saved token. To
+   reconnect later, run `-telega "token"` again and repeat the same
+   confirm-your-identity flow - there's no shortcut back in.
+
+The CLI and the Telegram bot read/write the same local state, so starting
+from one and checking/cancelling from the other just works.
+
+## How it works / limits
+
+- Uses `SetThreadExecutionState(ES_SYSTEM_REQUIRED)` in a small background
+  process that self-terminates when the timer runs out (or is killed by
+  `slip off`). No scheduled tasks, no registry changes.
+- The bot token is stored locally in `%LOCALAPPDATA%\slip\telegram.json`,
+  unencrypted. It never leaves your machine except in calls to the Telegram
+  Bot API. If you want it encrypted at rest, that's a reasonable thing to
+  add — open an issue.
+- Windows only.
