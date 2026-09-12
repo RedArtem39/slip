@@ -49,9 +49,21 @@ slip help               Show this help
 5. `slip -telega reset` unlinks the bot and erases the saved token. To
    reconnect later, run `-telega "token"` again and repeat the same
    confirm-your-identity flow - there's no shortcut back in.
+6. `slip -telega status` shows whether the bot is linked and whether its
+   background daemon is actually running.
 
 The CLI and the Telegram bot read/write the same local state, so starting
 from one and checking/cancelling from the other just works.
+
+### If the bot goes quiet
+
+The Telegram daemon is a plain background process - it does **not**
+survive a PC reboot or sign-out on its own (no scheduled task, nothing
+added to Windows startup). If it dies, `slip` notices and restarts it the
+next time you run *any* `slip` command (including a plain `slip status`),
+so linking survives - you never need to `reset` and re-link just because
+the daemon died. To restart it immediately without waiting for that,
+run `slip -telega start`.
 
 ## How it works / limits
 

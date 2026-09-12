@@ -40,6 +40,8 @@ internal static class SleepControl
           slip off              Cancel - restore normal sleep behavior
           slip status           Show whether it's currently active
           slip -telega "token"  Link a Telegram bot for remote control
+          slip -telega status   Show whether the bot is linked and running
+          slip -telega start    Restart the bot daemon if it died
           slip -telega reset    Unlink the Telegram bot
           slip help             Show this help
         """;

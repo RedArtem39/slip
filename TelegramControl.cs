@@ -11,12 +11,14 @@ internal static class TelegramControl
         new[] { new Button("⏹ Off", "off"), new Button("🔄 Refresh", "status") },
     };
 
-    /// <summary>Handles "slip -telega ...": either "reset" or "&lt;token&gt;" (claim flow).</summary>
+    /// <summary>Handles "slip -telega ...": "reset", "status", "start", or "&lt;token&gt;" (claim flow).</summary>
     public static async Task<int> RunSetupCommand(string[] args)
     {
         if (args.Length < 2)
         {
-            Console.Error.WriteLine("slip: usage - slip -telega \"bot_token\"   or   slip -telega reset");
+            Console.Error.WriteLine(
+                "slip: usage - slip -telega \"bot_token\"   or   slip -telega reset   " +
+                "or   slip -telega status   or   slip -telega start");
             return 1;
         }
 
@@ -26,7 +28,63 @@ internal static class TelegramControl
             return 0;
         }
 
+        if (args[1].Equals("status", StringComparison.OrdinalIgnoreCase))
+        {
+            ShowStatus();
+            return 0;
+        }
+
+        if (args[1].Equals("start", StringComparison.OrdinalIgnoreCase))
+        {
+            return EnsureDaemonRunning(announce: true) ? 0 : 1;
+        }
+
         return await Claim(args[1]);
+    }
+
+    private static void ShowStatus()
+    {
+        var config = TelegramConfig.Load();
+        if (config is null)
+        {
+            Console.WriteLine("slip: Telegram not linked. Run 'slip -telega \"token\"' to link.");
+            return;
+        }
+
+        Console.WriteLine(IsDaemonRunning()
+            ? $"slip: Telegram linked to admin ID {config.Value.AdminId}, daemon running."
+            : $"slip: Telegram linked to admin ID {config.Value.AdminId}, but the daemon is NOT running. " +
+              "It'll auto-restart on your next 'slip' command, or run 'slip -telega start' to do it now.");
+    }
+
+    /// <summary>
+    /// If Telegram is linked but its background daemon isn't running (e.g. it died on a PC reboot),
+    /// silently starts it again. Called on every normal CLI invocation so the bot self-heals without
+    /// the user having to notice or run 'slip -telega reset'. No-op if Telegram was never linked.
+    /// </summary>
+    public static bool EnsureDaemonRunning(bool announce = false)
+    {
+        var config = TelegramConfig.Load();
+        if (config is null) return false;
+
+        if (IsDaemonRunning())
+        {
+            if (announce) Console.WriteLine("slip: Telegram daemon already running.");
+            return true;
+        }
+
+        StartDaemon();
+        if (announce) Console.WriteLine("slip: Telegram daemon restarted.");
+        return true;
+    }
+
+    private static bool IsDaemonRunning()
+    {
+        var state = TelegramConfig.LoadDaemonState();
+        if (state is null) return false;
+
+        try { Process.GetProcessById(state.Value.Pid); return true; }
+        catch { return false; }
     }
 
     private static void Reset()
@@ -48,10 +106,20 @@ internal static class TelegramControl
         var existing = TelegramConfig.Load();
         if (existing is not null)
         {
+            if (IsDaemonRunning())
+            {
+                Console.WriteLine(
+                    $"slip: already linked to Telegram admin ID {existing.Value.AdminId}, daemon running. " +
+                    "Run 'slip -telega reset' first if you want to relink.");
+                return 1;
+            }
+
+            // Config is intact but the daemon died (e.g. PC reboot) - heal instead of demanding a full reset+relink.
             Console.WriteLine(
-                $"slip: already linked to Telegram admin ID {existing.Value.AdminId}. " +
-                "Run 'slip -telega reset' first if you want to relink.");
-            return 1;
+                $"slip: already linked to Telegram admin ID {existing.Value.AdminId}; " +
+                "daemon wasn't running - restarting it now.");
+            StartDaemon();
+            return 0;
         }
 
         var client = new TelegramClient(token);

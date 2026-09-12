@@ -17,7 +17,17 @@ internal readonly record struct Button(string Text, string Data);
 internal sealed class TelegramClient
 {
     private readonly string _token;
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(35) };
+
+    // PooledConnectionLifetime forces old sockets to be dropped periodically - without it, a
+    // long-lived HttpClient can get stuck trying to reuse a connection that died silently across
+    // a sleep/resume cycle, Wi-Fi power-saving reconnect, or VPN drop.
+    private readonly HttpClient _http = new(new SocketsHttpHandler
+    {
+        PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+    })
+    {
+        Timeout = TimeSpan.FromSeconds(35),
+    };
 
     public TelegramClient(string token) => _token = token;
 
@@ -104,12 +114,17 @@ internal sealed class TelegramClient
                 var url = $"https://api.telegram.org/bot{_token}/getUpdates?offset={offset}&timeout=30";
                 resp = await _http.GetStringAsync(url, ct);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 yield break;
             }
             catch
             {
+                // Also catches HttpClient's own per-request timeout (a TaskCanceledException,
+                // which is an OperationCanceledException) firing independently of `ct` - e.g.
+                // right after the PC wakes from sleep and the network isn't back up yet. Must be
+                // retried, not treated as real cancellation, or the daemon exits for good and
+                // never comes back until the next manual 'slip' command restarts it.
                 await Task.Delay(TimeSpan.FromSeconds(5), ct);
                 continue;
             }
