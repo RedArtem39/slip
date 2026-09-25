@@ -1,15 +1,18 @@
 using System.Diagnostics;
+using System.Net;
 
 namespace Slip;
 
 internal static class TelegramControl
 {
-    private static readonly IReadOnlyList<IReadOnlyList<Button>> Keyboard = new List<IReadOnlyList<Button>>
+    private static readonly IReadOnlyList<Button>[] DurationRows =
     {
         new[] { new Button("⏰ 1h", "start:h:1"), new Button("⏰ 4h", "start:h:4"), new Button("⏰ 8h", "start:h:8") },
         new[] { new Button("📅 1d", "start:d:1"), new Button("📅 4d", "start:d:4"), new Button("📅 7d", "start:d:7") },
-        new[] { new Button("⏹ Off", "off"), new Button("🔄 Refresh", "status") },
     };
+
+    private static readonly IReadOnlyList<Button> ControlRow =
+        new[] { new Button("⏹ Off", "off"), new Button("🔄 Refresh", "status") };
 
     /// <summary>Handles "slip -telega ...": "reset", "status", "start", or "&lt;token&gt;" (claim flow).</summary>
     public static async Task<int> RunSetupCommand(string[] args)
@@ -203,9 +206,15 @@ internal static class TelegramControl
     private static async Task HandleText(TelegramClient client, TextMessage msg)
     {
         var parts = msg.Text.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length > 0) CommandParser.Execute(parts); // typed shortcuts still work; we render our own dashboard
+        string? header = null;
+        if (parts.Length > 0)
+        {
+            // Typed commands work exactly like the CLI; we render our own dashboard, but surface errors.
+            var (ok, message) = CommandParser.Execute(parts);
+            if (!ok) header = "⚠️ " + WebUtility.HtmlEncode(message);
+        }
 
-        var (text, keyboard) = BuildDashboard();
+        var (text, keyboard) = BuildDashboard(header);
         await client.SendMessageAsync(msg.ChatId, text, keyboard);
     }
 
@@ -220,11 +229,16 @@ internal static class TelegramControl
                 break;
             case "status":
                 break; // just refresh the dashboard below
+            case "screen":
+                // Flip -m on the current run, keeping everything else about it.
+                var run = SleepControl.Current();
+                if (run is not null) SleepControl.Start(run with { KeepDisplay = !run.KeepDisplay });
+                break;
             default:
-                if (press.Data.StartsWith("start:h:") && double.TryParse(press.Data.AsSpan(8), out var hours))
-                    SleepControl.Start(TimeSpan.FromHours(hours));
-                else if (press.Data.StartsWith("start:d:") && double.TryParse(press.Data.AsSpan(8), out var days))
-                    SleepControl.Start(TimeSpan.FromDays(days));
+                if (TryParseSpan(press.Data, "start:", out var span))
+                    SleepControl.Start(new RunState { EndUtc = DateTime.UtcNow + span });
+                else if (TryParseSpan(press.Data, "ext:", out var by))
+                    SleepControl.Extend(by);
                 break;
         }
 
@@ -232,19 +246,81 @@ internal static class TelegramControl
         await client.EditMessageTextAsync(press.ChatId, press.MessageId, text, keyboard);
     }
 
+    /// <summary>Parses button data like "start:h:4" / "ext:d:1" into a span.</summary>
+    private static bool TryParseSpan(string data, string prefix, out TimeSpan span)
+    {
+        span = default;
+        if (!data.StartsWith(prefix)) return false;
+
+        var rest = data.AsSpan(prefix.Length);
+        if (rest.Length < 3 || rest[1] != ':' || !double.TryParse(rest[2..], out var n)) return false;
+
+        span = rest[0] == 'd' ? TimeSpan.FromDays(n) : TimeSpan.FromHours(n);
+        return true;
+    }
+
     private static (string Text, IReadOnlyList<IReadOnlyList<Button>> Keyboard) BuildDashboard(string? header = null)
     {
-        var info = SleepControl.GetStatusInfo();
+        var run = SleepControl.Current();
 
-        var status = info.Active
-            ? $"🟢 <b>Awake mode active</b>\n" +
-              $"Until {info.EndUtc!.Value.ToLocalTime():HH:mm, dd MMM} ({SleepControl.FormatSpan(info.Remaining!.Value)} left)\n" +
-              "Monitor still follows its own Windows sleep timeout."
-            : "⚪ <b>Not active</b>\nNormal sleep behavior in effect.";
+        var status = run switch
+        {
+            null => "⚪ <b>Not active</b>\nNormal sleep behavior in effect.\n" +
+                    "Type e.g. <code>-m 4</code>, <code>until 23:30</code>, " +
+                    "<code>while ffmpeg -then shutdown</code>.",
+            { ActionAtUtc: not null } => "🟠 <b>Finishing</b>\n" + WebUtility.HtmlEncode(SleepControl.Describe(run)),
+            _ => "🟢 <b>Awake mode active</b>\n" + WebUtility.HtmlEncode(SleepControl.Describe(run)),
+        };
 
         var prefix = header is null ? "" : header + "\n\n";
         var text = $"{prefix}🖥 <b>slip</b>\n\n{status}\n\nPick a duration, or turn it off:";
 
-        return (text, Keyboard);
+        var keyboard = new List<IReadOnlyList<Button>>(DurationRows);
+        if (run is not null)
+        {
+            if (run.EndUtc is not null) keyboard.Add(ExtendRow);
+            if (run.ActionAtUtc is null)
+                keyboard.Add(new[] { new Button(run.KeepDisplay ? "🌙 Let monitor sleep" : "💡 Keep monitor on", "screen") });
+        }
+        keyboard.Add(ControlRow);
+
+        return (text, keyboard);
+    }
+
+    private static readonly IReadOnlyList<Button> ExtendRow =
+        new[] { new Button("➕ 1h", "ext:h:1"), new Button("➕ 4h", "ext:h:4"), new Button("➕ 1d", "ext:d:1") };
+
+    /// <summary>Buttons under the "ending soon" heads-up.</summary>
+    public static readonly IReadOnlyList<IReadOnlyList<Button>> ExtendKeyboard = new[]
+    {
+        ExtendRow,
+        new[] { new Button("⏹ Off now", "off"), new Button("🔄 Status", "status") },
+    };
+
+    /// <summary>Buttons under the "PC will shut down in 60 s" warning.</summary>
+    public static readonly IReadOnlyList<IReadOnlyList<Button>> CancelActionKeyboard = new[]
+    {
+        new[] { new Button("✋ Cancel", "off") },
+        ExtendRow,
+    };
+
+    /// <summary>
+    /// Best-effort one-off message to the bound admin, used by the awake daemon for "ending soon" /
+    /// "finished" notices. Silently does nothing if Telegram isn't linked or the network is down.
+    /// Button presses on it are handled by the Telegram daemon like any other dashboard button.
+    /// </summary>
+    public static void Notify(string html, IReadOnlyList<IReadOnlyList<Button>>? keyboard = null)
+    {
+        var config = TelegramConfig.Load();
+        if (config is null) return;
+
+        try
+        {
+            // In a private chat the chat ID is the user's ID.
+            new TelegramClient(config.Value.BotToken)
+                .SendMessageAsync(config.Value.AdminId, html, keyboard)
+                .Wait(TimeSpan.FromSeconds(20));
+        }
+        catch { /* best effort */ }
     }
 }

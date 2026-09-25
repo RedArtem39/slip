@@ -7,6 +7,9 @@ background work — downloads, renders, scripts, servers — keeps running.
 It deliberately does **not** touch display power settings: your monitor
 still turns off on whatever schedule you've already set in Windows, since
 there's no reason to burn a screen for a background task.
+If you *do* want the screen to stay up (watching a long build, a
+dashboard, a presentation), add `-m`: `slip -m 2` also keeps the monitor
+on and stops Windows from idle-locking the session.
 
 Optionally controllable remotely over Telegram, with an inline-button
 dashboard, so you can extend/cancel the awake window from your phone.
@@ -28,12 +31,49 @@ dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile
 
 ```
 slip                    Show status (same as "slip status")
-slip <hours>            Stay awake for N hours   (e.g. slip 4)
+slip <hours>            Stay awake for N hours    (e.g. slip 4, slip 90m, slip 2d)
 slip -d <days>          Stay awake for N days     (e.g. slip -d 4)
+slip until <HH:mm>      Stay awake until a clock time (e.g. slip until 23:30)
+slip while <process>    Stay awake while a process runs (e.g. slip while ffmpeg)
+                        Add a duration to cap it: slip while ffmpeg 6
+slip forever            Stay awake until 'slip off'
+slip +<hours>           Extend the current run (e.g. slip +2, slip +30m)
 slip off                Cancel - restore normal sleep behavior
 slip status             Show whether it's currently active
+slip requests           Show what's keeping the PC/monitor awake (powercfg /requests)
 slip help               Show this help
 ```
+
+Options, combinable with any of the above:
+
+```
+-m                      Also keep the monitor on and block the idle lock screen
+-then <action>          When the run finishes: sleep, hibernate or shutdown
+```
+
+Examples:
+
+```
+slip -m 2                            watch a long build without the screen going dark
+slip while ffmpeg -then shutdown     turn the PC off once the render is done
+slip until 7:00 -then sleep          stay up for the overnight download, sleep in the morning
+```
+
+`while` takes a process name as shown in Task Manager's Details tab
+(`.exe` optional) or a PID; the run ends once no matching process is left.
+
+`-then` never fires instantly: when the run finishes, slip waits 60 seconds
+first. `slip off` (or the Telegram ✋ Cancel button) during that window
+cancels the action. It only fires when a run finishes on its own, never on
+`slip off`.
+
+`slip requests` works from any terminal: `powercfg /requests` needs admin,
+so from a normal one slip asks for a single UAC confirmation and prints the
+result right there. The first line says what slip itself is holding, e.g.
+`slip is holding SYSTEM + DISPLAY (monitor kept on)`.
+
+If Telegram is linked, the bot also messages you 10 minutes before a timed
+run ends (with ➕ extend buttons) and when a run finishes.
 
 ## Telegram remote control (optional)
 

@@ -15,14 +15,20 @@ internal static class Program
             return 0;
         }
 
+        if (args.Length > 1 && args[0].Equals(PowerRequests.ElevatedFlag, StringComparison.OrdinalIgnoreCase))
+        {
+            return PowerRequests.WriteReport(args[1]);
+        }
+
         if (args.Length > 0 && args[0].Equals("--daemon", StringComparison.OrdinalIgnoreCase))
         {
-            if (args.Length < 2 || !long.TryParse(args[1], out var endTicks))
+            var run = args.Length < 2 ? null : SleepControl.DecodeDaemonArg(args[1]);
+            if (run is null)
             {
                 Console.Error.WriteLine("slip: bad daemon args");
                 return 1;
             }
-            SleepControl.RunDaemon(new DateTime(endTicks, DateTimeKind.Utc));
+            SleepControl.RunDaemon(run);
             return 0;
         }
 
@@ -34,6 +40,12 @@ internal static class Program
         {
             Console.WriteLine(SleepControl.Status());
             return 0;
+        }
+
+        // CLI-only (not in CommandParser): it may pop a UAC prompt, which makes no sense from Telegram.
+        if (args.Length == 1 && args[0].Equals("requests", StringComparison.OrdinalIgnoreCase))
+        {
+            return PowerRequests.Show();
         }
 
         var (ok, message) = CommandParser.Execute(args);
